@@ -1,4 +1,6 @@
-// /api/create-payment.js для Paytree/Payforest
+// /api/create-payment.js --- ФИНАЛЬНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ ---
+
+import { randomUUID } from "crypto";
 
 export default async function handler(request, response) {
   // Настройка CORS
@@ -13,69 +15,84 @@ export default async function handler(request, response) {
     return response.status(200).end();
   }
 
-  if (request.method !== "POST") {
-    return response.status(405).json({ message: "Only POST requests allowed" });
+  if (request.method !== 'POST') {
+    return response.status(405).json({ message: 'Method Not Allowed' });
   }
 
   try {
-    const { amount, currency, description } = request.body;
-    const PAYTREE_API_KEY = process.env.PAYTREE_API_KEY; // Ключ из Vercel
-
+    const PAYTREE_API_KEY = process.env.PAYTREE_API_KEY;
     if (!PAYTREE_API_KEY) {
-      throw new Error("API ключ Paytree не настроен на сервере.");
+      console.error("API ключ Paytree не настроен на сервере.");
+      return response.status(500).json({ message: "Внутренняя ошибка конфигурации сервера." });
     }
 
-    // --- Получаем IP и User Agent из заголовков запроса ---
-    const ip =
-      request.headers["x-forwarded-for"] || request.socket.remoteAddress;
-    const userAgent = request.headers["user-agent"];
-    // ---------------------------------------------------
+    // 1. Получаем данные с фронтенда
+    const { amount, currency, description, customer, address } = request.body;
 
-    // Формируем тело запроса согласно документации Paytree
-    const bodyForApi = {
+    if (!amount || !currency || !customer) {
+        return response.status(400).json({ message: 'Недостаточно данных в запросе: требуются amount, currency и customer.' });
+    }
+
+    // 2. *** НОВОЕ: Получаем IP и User-Agent из заголовков запроса ***
+    // Vercel передает IP в заголовке 'x-forwarded-for'.
+    const ipAddress = request.headers['x-forwarded-for'] || '127.0.0.1';
+    const userAgent = request.headers['user-agent'] || 'Unknown';
+
+
+    // 3. Формируем ПОЛНЫЙ объект для отправки в Paytree API
+    const payloadForPaytree = {
+      transaction_ref: `TX-${randomUUID()}`,
+      client_ref: `CL-${randomUUID()}`,
       amount: amount,
-      currency: currency,
+      amount_currency: currency,
       description: description,
-      transaction_ref: `order_${Date.now()}`,
-      client: {
-        ref: `user_${Date.now()}`,
-        ip: ip,
-        user_agent: userAgent,
+      customer: customer,
+      address: address,
+
+      // Ссылки для редиректа и ДАННЫЕ СЕССИИ
+      session: {
+        // !!! ВАЖНО: Замените на ваши реальные URL
+        success_url: "https://your-site.com/payment-success",
+        cancel_url: "https://your-site.com/payment-cancelled",
+
+        // *** ДОБАВЛЕНО: IP-адрес и User-Agent пользователя ***
+        ip_address: ipAddress,
+        user_agent: userAgent, // Также передаем User-Agent, как просил разработчик
       },
-      notification_url: `https://your-site.com/webhooks/paytree?id={payment_intent_id}`,
+
+      // URL для получения вебхука
+      callback: {
+        // !!! ВАЖНО: Замените на ваш реальный URL для вебхуков
+        callback_url: "https://your-backend.vercel.app/api/payment-webhook",
+      },
     };
 
-    const PAYTREE_API_URL =
-      "https://api.payforest.xyz/v1/transaction/payment_intent/";
+    // 4. Отправляем запрос в Paytree
+    const PAYTREE_API_URL = "https://api.payforest.xyz/v1/transaction/payment_intent/";
 
     const paytreeResponse = await fetch(PAYTREE_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Token ${PAYTREE_API_KEY}`, // Аутентификация
+        Authorization: `Token ${PAYTREE_API_KEY}`,
       },
-      body: JSON.stringify(bodyForApi),
+      body: JSON.stringify(payloadForPaytree),
     });
 
-    const paytreeData = await paytreeResponse.json();
+    const responseData = await paytreeResponse.json();
+
     if (!paytreeResponse.ok) {
-      console.error(
-        "Ошибка от API Paytree:",
-        JSON.stringify(paytreeData, null, 2)
-      );
+      console.error("Ошибка от API Paytree:", responseData);
       throw new Error(
-        paytreeData.detail || "Ошибка от платежной системы Paytree"
+        `API Error ${paytreeResponse.status}: ${JSON.stringify(responseData)}`
       );
     }
 
-    const paymentLink = paytreeData.payment_link;
-    if (!paymentLink) {
-      throw new Error("Не удалось получить payment_link от Paytree");
-    }
+    // 5. Возвращаем ссылку на оплату на фронтенд
+    return response.status(200).json({ payment_link: responseData.payment_link });
 
-    return response.status(200).json({ payment_link: paymentLink });
   } catch (error) {
-    console.error("[PAYTREE_ERROR]", error.message);
+    console.error("[BACKEND_ERROR]", error.message);
     return response.status(500).json({ message: error.message });
   }
 }
