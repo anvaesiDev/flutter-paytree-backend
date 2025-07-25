@@ -52,7 +52,7 @@ export default async function handler(request, response) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${PAYTREE_API_KEY}`, // Аутентификация
+        Authorization: `Token ${PAYTREE_API_KEY}`, // Аутентификация
       },
       body: JSON.stringify(bodyForApi),
     });
